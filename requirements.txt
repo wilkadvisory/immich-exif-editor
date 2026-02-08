@@ -1,0 +1,6 @@
+customtkinter>=5.2.0
+Pillow>=10.0.0
+pywin32>=306
+tkcalendar>=1.6.1
+tkinterweb>=3.24.5
+python-dotenv>=1.0.0
