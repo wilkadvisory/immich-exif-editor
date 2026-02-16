@@ -1,7 +1,6 @@
 """GPS Preset Updater - Helper module to update GPS presets"""
 
 from pathlib import Path
-import re
 
 
 def update_gps_preset(slot, name, lat, lon):
@@ -17,42 +16,49 @@ def update_gps_preset(slot, name, lat, lon):
     
     # Read current file
     with open(preset_file, 'r', encoding='utf-8') as f:
-        content = f.read()
+        lines = f.readlines()
     
-    # Parse the current presets
-    match = re.search(r'GPS_PRESETS\s*=\s*\[(.*?)\]', content, re.DOTALL)
-    if not match:
-        raise ValueError("Could not parse GPS_PRESETS")
+    # Find the GPS_PRESETS array
+    start_idx = None
+    end_idx = None
+    for i, line in enumerate(lines):
+        if 'GPS_PRESETS = [' in line:
+            start_idx = i + 1
+        if start_idx and line.strip() == ']':
+            end_idx = i
+            break
     
-    # Build new preset entry
-    new_preset = f'{{"name": "{name}", "lat": {lat}, "lon": {lon}}}'
+    if start_idx is None or end_idx is None:
+        raise ValueError("Could not find GPS_PRESETS array")
     
-    # Split existing presets
-    presets_str = match.group(1)
-    preset_lines = [line.strip() for line in presets_str.split('},') if line.strip()]
+    # Parse existing presets
+    presets = []
+    for i in range(start_idx, end_idx):
+        line = lines[i].strip()
+        if line.startswith('{') and 'name' in line:
+            presets.append(line.rstrip(','))
     
-    # Ensure we have at least 6 slots
-    while len(preset_lines) < 6:
-        preset_lines.append('{"name": "Empty", "lat": 0, "lon": 0')
+    # Ensure we have 6 slots
+    while len(presets) < 6:
+        presets.append('{"name": "Empty", "lat": 0, "lon": 0}')
     
     # Update the specified slot
-    if 0 <= slot < len(preset_lines):
-        preset_lines[slot] = new_preset
+    if 0 <= slot < 6:
+        presets[slot] = f'{{"name": "{name}", "lat": {lat}, "lon": {lon}}}'
     
-    # Rebuild the file content
-    new_presets_str = ',\n    '.join(preset_lines)
-    if not new_presets_str.endswith('}'):
-        new_presets_str = new_presets_str + '}'
-    
-    new_content = f'''"""GPS location presets"""
+    # Rebuild file
+    new_content = '''"""GPS location presets"""
 
 # Edit these presets to your commonly used locations
-# Format: {{"name": "Display Name", "lat": latitude, "lon": longitude}}
+# Format: {"name": "Display Name", "lat": latitude, "lon": longitude}
 
 GPS_PRESETS = [
-    {new_presets_str},
-]
 '''
+    
+    for i, preset in enumerate(presets):
+        new_content += f"    {preset},\n"
+    
+    new_content += "]\n"
     
     # Write back
     with open(preset_file, 'w', encoding='utf-8') as f:
