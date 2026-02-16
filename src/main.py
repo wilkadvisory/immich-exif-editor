@@ -23,6 +23,8 @@ import win32file
 import win32con
 from dotenv import load_dotenv
 from version import __version__
+from gps_presets import GPS_PRESETS
+from gps_preset_updater import update_gps_preset
 
 # Load environment variables
 load_dotenv()
@@ -36,20 +38,18 @@ class ExifEditor(ctk.CTk):
     # Google Maps API Key - loaded from environment variable
     GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY', 'your_api_key_here')
     
+    # Debug: Print API key status on startup
+    if not GOOGLE_MAPS_API_KEY or GOOGLE_MAPS_API_KEY == 'your_api_key_here':
+        print("WARNING: Google Maps API key not loaded from .env file!")
+    
     def __init__(self):
         super().__init__()
         
         # Window setup
         self.title(f"Immich EXIF Bulk Editor v{__version__}")
-        self.geometry("1600x900")
         
-        # Centre window
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f'{width}x{height}+{x}+{y}')
+        # Start maximized
+        self.state('zoomed')  # Windows maximize
         
         # Lazy loading control
         self.load_executor = ThreadPoolExecutor(max_workers=10)
@@ -1050,6 +1050,40 @@ class ExifEditor(ctk.CTk):
         self.lon_entry.grid(row=2, column=1, padx=10, pady=8, sticky="ew")
         self.lon_entry.insert(0, "116.030874")  # Default home location
         
+        # Quick Location Presets
+        presets_frame = ctk.CTkFrame(tab)
+        presets_frame.pack(pady=15, padx=20, fill="x")
+        
+        ctk.CTkLabel(
+            presets_frame,
+            text="Quick Locations:",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(pady=5, anchor="w", padx=10)
+        
+        # Create preset buttons
+        buttons_container = ctk.CTkFrame(presets_frame, fg_color="transparent")
+        buttons_container.pack(fill="x", padx=10, pady=5)
+        
+        for preset in GPS_PRESETS:
+            ctk.CTkButton(
+                buttons_container,
+                text=preset["name"],
+                command=lambda p=preset: self.apply_gps_preset(p),
+                height=35,
+                font=ctk.CTkFont(size=12)
+            ).pack(side="left", padx=5, pady=5)
+        
+        # Edit presets button
+        ctk.CTkButton(
+            buttons_container,
+            text="⚙️ Edit Presets",
+            command=self.edit_gps_presets,
+            height=35,
+            font=ctk.CTkFont(size=12),
+            fg_color="gray40",
+            hover_color="gray30"
+        ).pack(side="left", padx=5, pady=5)
+        
         # Apply button
         ctk.CTkButton(
             tab,
@@ -1063,118 +1097,58 @@ class ExifEditor(ctk.CTk):
 
     def open_interactive_maps(self):
         """Open an interactive Google Maps page in browser."""
-        # Create a temp file for coordinate sharing
-        import os
-        coord_file = os.path.join(tempfile.gettempdir(), 'immich_gps_coords.txt')
-        
         html_content = f"""
 <!DOCTYPE html>
 <html>
 <head>
-    <title>GPS Coordinate Picker - Click to Auto-Copy!</title>
+    <title>GPS Coordinate Picker</title>
     <style>
-        body {{
-            font-family: 'Segoe UI', Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #f5f5f5;
-        }}
-        #search-container {{
-            margin-bottom: 15px;
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        #search-box {{
-            width: 100%;
-            padding: 12px;
-            font-size: 16px;
-            border: 2px solid #4285F4;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }}
-        #map {{
-            height: 600px;
-            width: 100%;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        }}
-        #coordinates {{
-            margin-top: 15px;
-            padding: 20px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        #coord-display {{
-            font-size: 24px;
-            font-weight: bold;
-            color: #4285F4;
-            margin: 10px 0;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 4px;
-            font-family: 'Courier New', monospace;
-        }}
-        .label {{
-            font-size: 14px;
-            color: #666;
-            margin-bottom: 5px;
-        }}
-        .instruction {{
-            color: #5f6368;
-            font-size: 16px;
-            margin-top: 10px;
-            font-weight: bold;
-        }}
-        #copy-btn {{
-            margin-top: 15px;
-            padding: 15px 30px;
-            font-size: 18px;
-            background: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-        }}
-        #copy-btn:hover {{
-            background: #45a049;
-        }}
-        #status {{
-            margin-top: 10px;
-            padding: 10px;
-            border-radius: 4px;
-            font-size: 14px;
-            display: none;
-        }}
-        #status.success {{
-            background: #d4edda;
-            color: #155724;
-            display: block;
-        }}
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }}
+        #search-container {{ margin-bottom: 15px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        #search-box {{ width: 100%; padding: 12px; font-size: 16px; border: 2px solid #4285F4; border-radius: 4px; box-sizing: border-box; }}
+        #map {{ height: 600px; width: 100%; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }}
+        #coordinates {{ margin-top: 15px; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        #coord-display {{ font-size: 24px; font-weight: bold; color: #4285F4; margin: 10px 0; padding: 15px; background: #f8f9fa; border-radius: 4px; font-family: 'Courier New', monospace; }}
+        .label {{ font-size: 14px; color: #666; margin-bottom: 5px; }}
+        .button-row {{ margin-top: 15px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+        button {{ padding: 15px 30px; font-size: 18px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }}
+        #copy-btn {{ background: #4CAF50; color: white; }}
+        #copy-btn:hover {{ background: #45a049; }}
+        #save-preset-btn {{ background: #FF9800; color: white; }}
+        #save-preset-btn:hover {{ background: #F57C00; }}
+        select {{ padding: 12px; font-size: 16px; border: 2px solid #4285F4; border-radius: 4px; background: white; cursor: pointer; }}
+        input[type="text"].preset-name {{ padding: 12px; font-size: 16px; border: 2px solid #4285F4; border-radius: 4px; width: 250px; }}
+        #status {{ margin-top: 10px; padding: 10px; border-radius: 4px; font-size: 14px; display: none; }}
+        #status.success {{ background: #d4edda; color: #155724; display: block; }}
     </style>
 </head>
 <body>
     <div id="search-container">
-        <input id="search-box" type="text" placeholder="Search for a location (e.g., 3 Stoneham St, Joondanna, Perth)" autofocus>
+        <input id="search-box" type="text" placeholder="Search for a location" autofocus>
     </div>
     <div id="map"></div>
     <div id="coordinates">
         <div class="label">Click anywhere on the map:</div>
         <div id="coord-display">Click on the map...</div>
-        <button id="copy-btn" onclick="copyToApp()" style="display:none;">📋 Copy to App</button>
+        <div class="button-row" style="display:none;" id="button-row">
+            <button id="copy-btn" onclick="copyToApp()">📋 Copy to App</button>
+            <input type="text" id="preset-name" class="preset-name" placeholder="Location name (e.g., 🏠 Home)">
+            <select id="preset-slot">
+                <option value="">Save to...</option>
+                <option value="0">Button 1</option>
+                <option value="1">Button 2</option>
+                <option value="2">Button 3</option>
+                <option value="3">Button 4</option>
+                <option value="4">Button 5</option>
+                <option value="5">Button 6</option>
+            </select>
+            <button id="save-preset-btn" onclick="savePreset()">💾 Save</button>
+        </div>
         <div id="status"></div>
-        <div class="instruction">✨ Coordinates auto-copy when you click the map!</div>
     </div>
     
     <script>
-        let map;
-        let marker;
-        let searchBox;
-        let currentLat = null;
-        let currentLng = null;
+        let map, marker, currentLat = null, currentLng = null;
         
         function initMap() {{
             map = new google.maps.Map(document.getElementById('map'), {{
@@ -1182,84 +1156,96 @@ class ExifEditor(ctk.CTk):
                 zoom: 14,
                 mapTypeControl: true,
                 streetViewControl: true,
-                fullscreenControl: true,
-                mapTypeId: 'roadmap'
+                fullscreenControl: true
             }});
             
             const input = document.getElementById('search-box');
-            searchBox = new google.maps.places.SearchBox(input);
+            const searchBox = new google.maps.places.SearchBox(input);
             
-            map.addListener('bounds_changed', function() {{
-                searchBox.setBounds(map.getBounds());
-            }});
-            
+            map.addListener('bounds_changed', () => searchBox.setBounds(map.getBounds()));
             searchBox.addListener('places_changed', function() {{
                 const places = searchBox.getPlaces();
                 if (places.length == 0) return;
-                
                 const place = places[0];
-                if (!place.geometry || !place.geometry.location) return;
-                
+                if (!place.geometry?.location) return;
                 map.setCenter(place.geometry.location);
                 map.setZoom(15);
                 placeMarker(place.geometry.location);
             }});
             
-            map.addListener('click', function(e) {{
-                placeMarker(e.latLng);
-            }});
+            map.addListener('click', e => placeMarker(e.latLng));
         }}
         
         function placeMarker(location) {{
-            if (marker) {{
-                marker.setMap(null);
-            }}
-            
+            if (marker) marker.setMap(null);
             marker = new google.maps.Marker({{
                 position: location,
                 map: map,
-                animation: google.maps.Animation.DROP,
-                title: 'Selected Location'
+                animation: google.maps.Animation.DROP
             }});
             
             currentLat = location.lat().toFixed(6);
             currentLng = location.lng().toFixed(6);
-            
-            document.getElementById('coord-display').innerHTML = 
-                `Latitude: ${{currentLat}}<br>Longitude: ${{currentLng}}`;
-            document.getElementById('copy-btn').style.display = 'inline-block';
-            
-            // Auto-copy to file
+            document.getElementById('coord-display').innerHTML = `Latitude: ${{currentLat}}<br>Longitude: ${{currentLng}}`;
+            document.getElementById('button-row').style.display = 'flex';
             copyToApp();
         }}
         
         function copyToApp() {{
-            if (currentLat && currentLng) {{
-                // Write to temp file via data URL trick
-                const data = currentLat + ',' + currentLng;
-                
-                // Try clipboard API first
-                if (navigator.clipboard) {{
-                    navigator.clipboard.writeText(data).then(() => {{
-                        showStatus('✓ Coordinates copied! Switch to app and paste.');
-                    }});
-                }}
-                
-                // Also write to localStorage for polling
-                localStorage.setItem('immich_coords', data);
-                localStorage.setItem('immich_coords_time', Date.now());
-                
-                showStatus('✓ Coordinates ready! Check the app.');
+            if (!currentLat || !currentLng) return;
+            const data = currentLat + ',' + currentLng;
+            if (navigator.clipboard) {{
+                navigator.clipboard.writeText(data).then(() => showStatus('✓ Copied to clipboard!'));
             }}
+        }}
+        
+        function savePreset() {{
+            const slot = document.getElementById('preset-slot').value;
+            const name = document.getElementById('preset-name').value.trim();
+            
+            if (!slot) {{
+                alert('Please select a button slot');
+                return;
+            }}
+            if (!name) {{
+                alert('Please enter a location name');
+                return;
+            }}
+            if (!currentLat || !currentLng) {{
+                alert('Please select a location on the map first');
+                return;
+            }}
+            
+            // Create JSON file and download it
+            const presetData = {
+                slot: parseInt(slot),
+                name: name,
+                lat: parseFloat(currentLat),
+                lon: parseFloat(currentLng)
+            };
+            
+            const blob = new Blob([JSON.stringify(presetData)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'immich_preset_save.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            showStatus(`✓ File downloaded! Move it to your Downloads or temp folder - the app will detect it.`);
+            
+            // Clear fields
+            document.getElementById('preset-name').value = '';
+            document.getElementById('preset-slot').value = '';
         }}
         
         function showStatus(message) {{
             const status = document.getElementById('status');
             status.className = 'success';
             status.textContent = message;
-            setTimeout(() => {{
-                status.style.display = 'none';
-            }}, 3000);
+            setTimeout(() => status.style.display = 'none', 5000);
         }}
     </script>
     <script src="https://maps.googleapis.com/maps/api/js?key={self.GOOGLE_MAPS_API_KEY}&libraries=places&callback=initMap" async defer></script>
@@ -1272,9 +1258,48 @@ class ExifEditor(ctk.CTk):
             self.map_html_path = f.name
         
         webbrowser.open('file://' + self.map_html_path)
-        
-        # Start polling for coordinates
         self.start_coordinate_polling()
+        self.start_preset_save_polling()  # NEW: Also poll for preset saves
+    
+    def start_preset_save_polling(self):
+        """Poll for preset save requests from the browser."""
+        def check_preset_save():
+            try:
+                # Check both Downloads and temp folders
+                downloads_file = Path.home() / 'Downloads' / 'immich_preset_save.json'
+                temp_file = Path(tempfile.gettempdir()) / 'immich_preset_save.json'
+                
+                preset_file = None
+                if downloads_file.exists():
+                    preset_file = downloads_file
+                elif temp_file.exists():
+                    preset_file = temp_file
+                
+                if preset_file:
+                    import json
+                    with open(preset_file, 'r') as f:
+                        data = json.load(f)
+                    
+                    # Update the preset
+                    update_gps_preset(data['slot'], data['name'], data['lat'], data['lon'])
+                    
+                    # Delete the file
+                    preset_file.unlink()
+                    
+                    # Show confirmation
+                    messagebox.showinfo(
+                        "Preset Saved",
+                        f"Saved '{data['name']}' to Button {data['slot'] + 1}!\n\nRestart the app to see the changes."
+                    )
+            except Exception as e:
+                print(f"Error checking preset save: {e}")
+            
+            # Check again in 1 second
+            if hasattr(self, '_polling_active') and self._polling_active:
+                self.after(1000, check_preset_save)
+        
+        self._polling_active = True
+        self.after(1000, check_preset_save)
     
     def start_coordinate_polling(self):
         """Poll for new coordinates from the browser."""
@@ -1898,6 +1923,44 @@ class ExifEditor(ctk.CTk):
                 
         except Exception as e:
             raise Exception(f"Failed to set Windows timestamps: {e}")
+    
+    def apply_gps_preset(self, preset):
+        """Apply a GPS preset to the coordinate fields."""
+        self.lat_entry.delete(0, 'end')
+        self.lat_entry.insert(0, str(preset["lat"]))
+        self.lon_entry.delete(0, 'end')
+        self.lon_entry.insert(0, str(preset["lon"]))
+        
+        # Flash the fields to show update
+        self.lat_entry.configure(border_color="green")
+        self.lon_entry.configure(border_color="green")
+        self.after(1000, lambda: self.lat_entry.configure(border_color=""))
+        self.after(1000, lambda: self.lon_entry.configure(border_color=""))
+    
+    def edit_gps_presets(self):
+        """Open the GPS presets file for editing."""
+        preset_file = Path(__file__).parent / 'gps_presets.py'
+        
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(str(preset_file))
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.call(['open', str(preset_file)])
+            else:  # Linux
+                subprocess.call(['xdg-open', str(preset_file)])
+            
+            messagebox.showinfo(
+                "Edit GPS Presets",
+                "The GPS presets file has been opened.\n\n"
+                "Edit the locations and save the file.\n"
+                "Restart the application to see your changes."
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Could not open presets file:\n{e}\n\n"
+                f"File location: {preset_file}"
+            )
     
     def apply_gps(self):
         """Apply GPS coordinates to selected files with parallel processing."""

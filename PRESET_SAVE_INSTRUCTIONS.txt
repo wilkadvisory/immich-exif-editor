@@ -1,0 +1,112 @@
+FIX FOR GPS PRESET SAVING
+===========================
+
+PROBLEM: The browser's localStorage.setItem() cannot be read by Python.
+
+SOLUTION: Download a JSON file instead that Python can detect.
+
+STEPS TO FIX:
+=============
+
+1. Open src/main.py
+2. Find the JavaScript function "savePreset()" in the HTML string (around line 1240)
+3. Replace the ENTIRE savePreset function with this:
+
+        function savePreset() {
+            const slot = document.getElementById('preset-slot').value;
+            const name = document.getElementById('preset-name').value.trim();
+            
+            if (!slot) {
+                alert('Please select a button slot');
+                return;
+            }
+            if (!name) {
+                alert('Please enter a location name');
+                return;
+            }
+            if (!currentLat || !currentLng) {
+                alert('Please select a location on the map first');
+                return;
+            }
+            
+            // Create JSON file and download it
+            const presetData = {
+                slot: parseInt(slot),
+                name: name,
+                lat: parseFloat(currentLat),
+                lon: parseFloat(currentLng)
+            };
+            
+            const blob = new Blob([JSON.stringify(presetData)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'immich_preset_save.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            showStatus(`✓ File downloaded! Move it to your Downloads or temp folder - the app will detect it.`);
+            
+            // Clear fields
+            document.getElementById('preset-name').value = '';
+            document.getElementById('preset-slot').value = '';
+        }
+
+4. Also replace the start_preset_save_polling function (around line 1254) with this:
+
+    def start_preset_save_polling(self):
+        """Poll for preset save requests from the browser."""
+        def check_preset_save():
+            try:
+                # Check both Downloads and temp folders
+                downloads_file = Path.home() / 'Downloads' / 'immich_preset_save.json'
+                temp_file = Path(tempfile.gettempdir()) / 'immich_preset_save.json'
+                
+                preset_file = None
+                if downloads_file.exists():
+                    preset_file = downloads_file
+                elif temp_file.exists():
+                    preset_file = temp_file
+                
+                if preset_file:
+                    import json
+                    with open(preset_file, 'r') as f:
+                        data = json.load(f)
+                    
+                    # Update the preset
+                    update_gps_preset(data['slot'], data['name'], data['lat'], data['lon'])
+                    
+                    # Delete the file
+                    preset_file.unlink()
+                    
+                    # Show confirmation
+                    messagebox.showinfo(
+                        "Preset Saved",
+                        f"Saved '{data['name']}' to Button {data['slot'] + 1}!\n\nRestart the app to see the changes."
+                    )
+            except Exception as e:
+                print(f"Error checking preset save: {e}")
+            
+            # Check again in 1 second
+            if hasattr(self, '_polling_active') and self._polling_active:
+                self.after(1000, check_preset_save)
+        
+        self._polling_active = True
+        self.after(1000, check_preset_save)
+
+5. Save the file and restart the app.
+
+HOW IT WORKS NOW:
+================
+1. Open Google Maps picker
+2. Click location on map
+3. Enter preset name (e.g., "🏠 Home")  
+4. Select button slot (1-6)
+5. Click "Save" - this downloads immich_preset_save.json
+6. Move the downloaded file to your Downloads or temp folder
+7. The app automatically detects it and updates the preset
+8. Restart app to see the new button
+
+The app checks your Downloads folder every second for the JSON file.
